@@ -1,0 +1,21 @@
+@import 'tailwindcss';
+
+@theme {
+  --color-navy: #0f2847;
+  --color-navy-light: #1a3a5c;
+  --color-brand-red: #c62828;
+  --color-brand-blue: #1565c0;
+  --color-surface: #f4f6f9;
+  --color-sidebar-active: #c62828;
+  --font-sans: 'Inter', system-ui, sans-serif;
+}
+
+@layer base {
+  * {
+    @apply border-slate-200;
+  }
+  body {
+    @apply bg-surface text-slate-900 antialiased;
+    font-family: var(--font-sans);
+  }
+}

@@ -26,6 +26,8 @@ Execute SQL files in `migrations/` **in numeric order** using the Supabase SQL E
 20. `020_settings_rls.sql` (system_settings, audit_logs, fare/membership types, RBAC read)
 21. `021_admin_modules_rls.sql` (payroll, inventory, documents staff policies)
 22. `022_registration_application_rpc.sql` (public registration + `submit_membership_application` RPC)
+23. `023_member_loan_application_rpc.sql` (`submit_loan_application` RPC + loan type read RLS)
+24. `024_loan_application_rate_from_type.sql` (member applications use admin loan-type rate only)
 
 ## If a migration says “relation already exists”
 

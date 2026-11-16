@@ -28,7 +28,9 @@ Execute SQL files in `migrations/` **in numeric order** using the Supabase SQL E
 22. `022_registration_application_rpc.sql` (public registration + `submit_membership_application` RPC)
 23. `023_member_loan_application_rpc.sql` (`submit_loan_application` RPC + loan type read RLS)
 24. `024_loan_application_rate_from_type.sql` (member applications use admin loan-type rate only)
-25. `025_operations_finance_enhancements.sql` (POS products, loan due dates, payroll/docs columns, inventory RPC)
+25. `025_operations_finance_enhancements.sql` (POS products table, loan due dates, payroll/docs columns, inventory RPC)
+26. `026_clear_pos_product_seed.sql` (optional — remove demo POS products if 025 was run with older seed)
+27. `027_loan_types_staff_rls.sql` (staff create/update loan types)
 
 ## If a migration says “relation already exists”
 

@@ -2,8 +2,9 @@
 
 const MONEY_PATTERN = /^-?\d+(\.\d{0,2})?$/
 
-export function parseMoneyInput(value: string): string {
-  const cleaned = value.replace(/[₱,\s]/g, '').trim()
+export function parseMoneyInput(value: string | number): string {
+  const raw = typeof value === 'number' ? value.toFixed(2) : String(value ?? '')
+  const cleaned = raw.replace(/[₱,\s]/g, '').trim()
   if (cleaned === '' || cleaned === '-') return cleaned
   if (!MONEY_PATTERN.test(cleaned)) {
     throw new Error(`Invalid money amount: ${value}`)

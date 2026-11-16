@@ -21,14 +21,7 @@ drop policy if exists pos_products_active_read on public.pos_products;
 create policy pos_products_active_read on public.pos_products for select
   using (is_active = true or public.is_staff());
 
-insert into public.pos_products (name, unit_price, is_default, sort_order)
-select * from (values
-  ('Share / contribution', 100.00::numeric, true, 1),
-  ('Product sale', 50.00::numeric, false, 2),
-  ('Service fee', 25.00::numeric, false, 3),
-  ('Miscellaneous', 10.00::numeric, false, 4)
-) as v(name, unit_price, is_default, sort_order)
-where not exists (select 1 from public.pos_products limit 1);
+-- POS catalog starts empty; staff add products from Daily Collections UI.
 
 alter table public.operating_expenses
   add column if not exists odometer_reading numeric(12, 2);

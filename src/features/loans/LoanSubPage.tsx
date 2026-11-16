@@ -1,13 +1,17 @@
-import { useMemo, useState, type ReactNode } from 'react'
+import { useCallback, useMemo, useState, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useParams } from 'react-router-dom'
+import { Download, Wallet } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { KpiCard } from '@/components/shared/KpiCard'
 import { PageHeader } from '@/components/shared/PageHeader'
 import { CurrencyDisplay } from '@/components/shared/CurrencyDisplay'
 import { EmptyState } from '@/components/shared/EmptyState'
+import { downloadTextFile } from '@/lib/download'
+import { formatPeso } from '@/lib/money'
 import { supabase } from '@/lib/supabase'
 
 function DetailRow({ label, value }: { label: string; value: ReactNode }) {
@@ -39,6 +43,13 @@ export function LoanSubPage() {
   const [purpose, setPurpose] = useState('')
   const [repayLoanId, setRepayLoanId] = useState('')
   const [repayAmount, setRepayAmount] = useState('')
+  const [typeModalOpen, setTypeModalOpen] = useState(false)
+  const [editTypeId, setEditTypeId] = useState<string | null>(null)
+  const [editTypeName, setEditTypeName] = useState('')
+  const [editTypeRate, setEditTypeRate] = useState('')
+  const [editTypeTerm, setEditTypeTerm] = useState('12')
+  const [editTypeActive, setEditTypeActive] = useState(true)
+  const [typeFormError, setTypeFormError] = useState<string | null>(null)
 
   const { data: applications = [] } = useQuery({
     queryKey: ['loan-applications'],
@@ -51,7 +62,7 @@ export function LoanSubPage() {
       if (error) throw error
       return data
     },
-    enabled: section === 'applications',
+    enabled: section === 'applications' || section === 'reports',
   })
 
   const [detailLoanId, setDetailLoanId] = useState<string | null>(null)
@@ -67,7 +78,7 @@ export function LoanSubPage() {
       if (error) throw error
       return data
     },
-    enabled: section === 'active' || section === 'repayments',
+    enabled: section === 'active' || section === 'repayments' || section === 'reports',
   })
 
   const { data: loanSchedules = [] } = useQuery({
@@ -111,11 +122,71 @@ export function LoanSubPage() {
   const { data: loanTypes = [] } = useQuery({
     queryKey: ['loan-types'],
     queryFn: async () => {
-      const { data, error } = await supabase.from('loan_types').select('*').eq('is_active', true)
+      const q = supabase.from('loan_types').select('*').order('name')
+      const { data, error } = section === 'types' ? await q : await q.eq('is_active', true)
       if (error) throw error
-      return data as { id: string; name: string; default_rate: string; default_term_months: number }[]
+      return data as {
+        id: string
+        name: string
+        default_rate: string
+        default_term_months: number
+        is_active: boolean
+      }[]
     },
     enabled: section === 'types' || openApp,
+  })
+
+  function openLoanTypeModal(type?: {
+    id: string
+    name: string
+    default_rate: string
+    default_term_months: number
+    is_active: boolean
+  }) {
+    if (type) {
+      setEditTypeId(type.id)
+      setEditTypeName(type.name)
+      setEditTypeRate(String(type.default_rate))
+      setEditTypeTerm(String(type.default_term_months))
+      setEditTypeActive(type.is_active)
+    } else {
+      setEditTypeId(null)
+      setEditTypeName('')
+      setEditTypeRate('8')
+      setEditTypeTerm('12')
+      setEditTypeActive(true)
+    }
+    setTypeFormError(null)
+    setTypeModalOpen(true)
+  }
+
+  const saveLoanType = useMutation({
+    mutationFn: async () => {
+      const name = editTypeName.trim()
+      const rate = Number(editTypeRate)
+      const term = Number(editTypeTerm)
+      if (!name) throw new Error('Name is required.')
+      if (!Number.isFinite(rate) || rate < 0) throw new Error('Enter a valid interest rate.')
+      if (!Number.isFinite(term) || term < 1) throw new Error('Term must be at least 1 month.')
+      const row = {
+        name,
+        default_rate: rate,
+        default_term_months: Math.round(term),
+        is_active: editTypeActive,
+      }
+      if (editTypeId) {
+        const { error } = await supabase.from('loan_types').update(row).eq('id', editTypeId)
+        if (error) throw error
+      } else {
+        const { error } = await supabase.from('loan_types').insert(row)
+        if (error) throw error
+      }
+    },
+    onSuccess: () => {
+      setTypeModalOpen(false)
+      qc.invalidateQueries({ queryKey: ['loan-types'] })
+    },
+    onError: (e: Error) => setTypeFormError(e.message),
   })
 
   const { data: repayments = [] } = useQuery({
@@ -129,8 +200,91 @@ export function LoanSubPage() {
       if (error) throw error
       return data
     },
-    enabled: section === 'repayments',
+    enabled: section === 'repayments' || section === 'reports',
   })
+
+  const { data: agingRows = [] } = useQuery({
+    queryKey: ['loan-reports-aging'],
+    queryFn: async () => {
+      const today = new Date().toISOString().slice(0, 10)
+      const { data, error } = await supabase
+        .from('loan_schedules')
+        .select('payment_no, due_date, amount_due, status, loans(loan_number, member_id, members(full_name, member_code))')
+        .lte('due_date', today)
+        .neq('status', 'paid')
+        .order('due_date', { ascending: true })
+        .limit(50)
+      if (error) throw error
+      return (data ?? []).map((row) => {
+        const rawLoan = row.loans as
+          | { loan_number: string; members: { full_name: string; member_code: string } | { full_name: string; member_code: string }[] | null }
+          | { loan_number: string; members: { full_name: string; member_code: string } | { full_name: string; member_code: string }[] | null }[]
+          | null
+        const loan = Array.isArray(rawLoan) ? rawLoan[0] : rawLoan
+        const rawM = loan?.members
+        const members = rawM == null ? null : Array.isArray(rawM) ? rawM[0] ?? null : rawM
+        return {
+          payment_no: row.payment_no as number,
+          due_date: row.due_date as string,
+          amount_due: String(row.amount_due),
+          status: row.status as string,
+          loans: loan ? { loan_number: loan.loan_number, members } : null,
+        }
+      })
+    },
+    enabled: section === 'reports',
+  })
+
+  const reportStats = useMemo(() => {
+    const portfolio = loans as {
+      status: string
+      principal: string
+      outstanding_principal: string
+    }[]
+    const active = portfolio.filter((l) => ['active', 'delinquent'].includes(l.status))
+    const outstanding = active.reduce((s, l) => s + Number(l.outstanding_principal), 0)
+    const totalPrincipal = active.reduce((s, l) => s + Number(l.principal), 0)
+    const apps = applications as { status: string }[]
+    const pendingApps = apps.filter((a) => ['submitted', 'pending', 'under_review'].includes(a.status)).length
+    const repayTotal = (repayments as { amount: string }[]).reduce((s, r) => s + Number(r.amount), 0)
+    return {
+      activeCount: active.length,
+      outstanding,
+      totalPrincipal,
+      pendingApps,
+      repayTotal,
+      overdueCount: agingRows.length,
+    }
+  }, [loans, applications, repayments, agingRows])
+
+  const downloadPortfolioCsv = useCallback(() => {
+    const lines = ['KAAGAPAY Loan Portfolio', `Generated,${new Date().toISOString().slice(0, 10)}`, '']
+    lines.push('Loan No.,Member,Principal,Outstanding,Rate %,Term,Status')
+    for (const row of loans as {
+      loan_number: string
+      principal: string
+      outstanding_principal: string
+      interest_rate: string
+      term_months: number
+      status: string
+      members: { full_name: string; member_code: string } | { full_name: string; member_code: string }[] | null
+    }[]) {
+      const raw = row.members
+      const m = Array.isArray(raw) ? raw[0] : raw
+      lines.push(
+        [
+          row.loan_number,
+          m ? `${m.full_name} (${m.member_code})` : '',
+          row.principal,
+          row.outstanding_principal,
+          String(row.interest_rate),
+          String(row.term_months),
+          row.status,
+        ].join(','),
+      )
+    }
+    downloadTextFile(`kaagapay-loan-portfolio-${new Date().toISOString().slice(0, 10)}.csv`, lines.join('\r\n'))
+  }, [loans])
 
   const { data: members = [] } = useQuery({
     queryKey: ['members', 'loans'],
@@ -273,7 +427,11 @@ export function LoanSubPage() {
         title={title}
         description="Loans & financing — applications, disbursement, and repayments via Supabase RPCs."
         actions={
-          section === 'applications' ? (
+          section === 'types' ? (
+            <Button type="button" onClick={() => openLoanTypeModal()}>
+              Add loan type
+            </Button>
+          ) : section === 'applications' ? (
             <Button onClick={() => setOpenApp(true)}>New application</Button>
           ) : section === 'repayments' ? (
             <Button variant="outline" asChild>
@@ -493,6 +651,50 @@ export function LoanSubPage() {
         </div>
       ) : null}
 
+      {typeModalOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" role="dialog" aria-modal="true">
+          <Card className="w-full max-w-md">
+            <CardHeader>
+              <CardTitle>{editTypeId ? 'Edit loan type' : 'Add loan type'}</CardTitle>
+            </CardHeader>
+            <CardContent className="grid gap-3">
+              <div>
+                <Label htmlFor="lt-name">Name</Label>
+                <Input id="lt-name" value={editTypeName} onChange={(e) => setEditTypeName(e.target.value)} />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <Label htmlFor="lt-rate">Default rate (%)</Label>
+                  <Input id="lt-rate" inputMode="decimal" value={editTypeRate} onChange={(e) => setEditTypeRate(e.target.value)} />
+                </div>
+                <div>
+                  <Label htmlFor="lt-term">Term (months)</Label>
+                  <Input id="lt-term" inputMode="numeric" value={editTypeTerm} onChange={(e) => setEditTypeTerm(e.target.value)} />
+                </div>
+              </div>
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={editTypeActive}
+                  onChange={(e) => setEditTypeActive(e.target.checked)}
+                />
+                Active (shown to members when applying)
+              </label>
+              <p className="text-xs text-slate-500">Members see this rate when they apply; only staff can change it here.</p>
+              {typeFormError ? <p className="text-sm text-red-600">{typeFormError}</p> : null}
+              <div className="flex gap-2">
+                <Button type="button" onClick={() => saveLoanType.mutate()} disabled={saveLoanType.isPending}>
+                  Save
+                </Button>
+                <Button type="button" variant="outline" onClick={() => setTypeModalOpen(false)}>
+                  Cancel
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      ) : null}
+
       {section === 'types' ? (
         <Card>
           <CardContent className="p-0">
@@ -502,24 +704,135 @@ export function LoanSubPage() {
                   <th className="px-4 py-2 text-left">Name</th>
                   <th className="px-4 py-2 text-left">Default rate</th>
                   <th className="px-4 py-2 text-left">Term (months)</th>
+                  <th className="px-4 py-2 text-left">Status</th>
+                  <th className="px-4 py-2 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {loanTypes.map((t) => (
                   <tr key={t.id} className="border-t">
-                    <td className="px-4 py-2">{t.name}</td>
-                    <td className="px-4 py-2">{t.default_rate}%</td>
+                    <td className="px-4 py-2 font-medium text-navy">{t.name}</td>
+                    <td className="px-4 py-2">{Number(t.default_rate)}%</td>
                     <td className="px-4 py-2">{t.default_term_months}</td>
+                    <td className="px-4 py-2">{t.is_active ? 'Active' : 'Inactive'}</td>
+                    <td className="px-4 py-2 text-right">
+                      <Button type="button" size="sm" variant="outline" onClick={() => openLoanTypeModal(t)}>
+                        Edit
+                      </Button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
             </table>
+            {!loanTypes.length ? (
+              <p className="p-6 text-sm text-slate-500">No loan types yet. Use Add loan type to create Regular or Product loan.</p>
+            ) : null}
           </CardContent>
         </Card>
       ) : null}
 
       {section === 'reports' ? (
-        <EmptyState title="Loan reports" description="Export and aging reports will aggregate live loan tables in a future pass." />
+        <div className="space-y-6">
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+            <KpiCard label="Active loans" value={String(reportStats.activeCount)} icon={Wallet} />
+            <KpiCard label="Outstanding" value={formatPeso(reportStats.outstanding)} icon={Wallet} />
+            <KpiCard label="Principal disbursed" value={formatPeso(reportStats.totalPrincipal)} icon={Wallet} />
+            <KpiCard label="Pending applications" value={String(reportStats.pendingApps)} icon={Wallet} />
+            <KpiCard label="Due / overdue items" value={String(reportStats.overdueCount)} icon={Wallet} iconClassName="bg-amber-50 text-amber-700" />
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" variant="outline" onClick={downloadPortfolioCsv}>
+              <Download className="mr-2 h-4 w-4" />
+              Export portfolio CSV
+            </Button>
+          </div>
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Aging — schedules due or overdue</CardTitle>
+            </CardHeader>
+            <CardContent className="overflow-x-auto p-0">
+              {agingRows.length === 0 ? (
+                <p className="p-6 text-sm text-slate-500">No overdue or due installments right now.</p>
+              ) : (
+                <table className="w-full text-sm">
+                  <thead className="bg-slate-50">
+                    <tr>
+                      <th className="px-4 py-2 text-left">Loan</th>
+                      <th className="px-4 py-2 text-left">Member</th>
+                      <th className="px-4 py-2 text-left">Due date</th>
+                      <th className="px-4 py-2 text-left">Amount due</th>
+                      <th className="px-4 py-2 text-left">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {agingRows.map((row, i) => {
+                      const loan = row.loans
+                      const m = loan?.members
+                      const member = Array.isArray(m) ? m[0] : m
+                      return (
+                        <tr key={`${row.due_date}-${i}`} className="border-t">
+                          <td className="px-4 py-2">{loan?.loan_number ?? '—'}</td>
+                          <td className="px-4 py-2">{member ? `${member.full_name} (${member.member_code})` : '—'}</td>
+                          <td className="px-4 py-2">{new Date(row.due_date).toLocaleDateString()}</td>
+                          <td className="px-4 py-2">
+                            <CurrencyDisplay amount={row.amount_due} />
+                          </td>
+                          <td className="px-4 py-2">{row.status}</td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              )}
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Portfolio</CardTitle>
+            </CardHeader>
+            <CardContent className="overflow-x-auto p-0">
+              {(loans as []).length === 0 ? (
+                <p className="p-6 text-sm text-slate-500">No loans disbursed yet.</p>
+              ) : (
+                <table className="w-full text-sm">
+                  <thead className="bg-slate-50">
+                    <tr>
+                      <th className="px-4 py-2 text-left">Loan</th>
+                      <th className="px-4 py-2 text-left">Member</th>
+                      <th className="px-4 py-2 text-left">Outstanding</th>
+                      <th className="px-4 py-2 text-left">Rate</th>
+                      <th className="px-4 py-2 text-left">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(loans as { loan_number: string; outstanding_principal: string; interest_rate: string; status: string; members: { full_name: string } | { full_name: string }[] | null }[]).map((row) => {
+                      const m = row.members
+                      const member = Array.isArray(m) ? m[0] : m
+                      return (
+                      <tr key={row.loan_number} className="border-t">
+                        <td className="px-4 py-2">{row.loan_number}</td>
+                        <td className="px-4 py-2">{member?.full_name ?? '—'}</td>
+                        <td className="px-4 py-2">
+                          <CurrencyDisplay amount={row.outstanding_principal} />
+                        </td>
+                        <td className="px-4 py-2">{Number(row.interest_rate)}%</td>
+                        <td className="px-4 py-2">{row.status}</td>
+                      </tr>
+                    )})}
+                  </tbody>
+                </table>
+              )}
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Recent repayments (loaded)</CardTitle>
+            </CardHeader>
+            <CardContent className="text-sm text-slate-600">
+              Total recorded on this page: <strong>{formatPeso(reportStats.repayTotal)}</strong>
+            </CardContent>
+          </Card>
+        </div>
       ) : null}
 
       {!['applications', 'active', 'repayments', 'types', 'reports'].includes(section) ? (

@@ -1,10 +1,18 @@
+import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useParams } from 'react-router-dom'
+import { BookOpen, CalendarDays, FileStack, Search } from 'lucide-react'
+import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { KpiCard } from '@/components/shared/KpiCard'
 import { PageHeader } from '@/components/shared/PageHeader'
+import { EmptyState } from '@/components/shared/EmptyState'
 import { CurrencyDisplay } from '@/components/shared/CurrencyDisplay'
 import { formatPeso } from '@/lib/money'
 import { supabase } from '@/lib/supabase'
+import { BudgetExpensesSection } from '@/features/finance/BudgetExpensesSection'
 
 const meta: Record<string, { title: string; description: string }> = {
   'general-ledger': {
@@ -30,11 +38,52 @@ const GL_BUCKETS: GlBucket[] = [
   { key: 'salary', label: 'Salary / payroll', match: /payroll|salary|wage|benefit/i },
 ]
 
+type GlJournal = {
+  id: string
+  reference: string
+  description: string | null
+  entry_date: string
+  source_type: string | null
+  posted_at: string | null
+}
+
+function journalMatchesBucket(j: GlJournal, bucket: GlBucket): boolean {
+  if (bucket.key === 'all') return true
+  if (!bucket.match) return true
+  const haystack = `${j.description ?? ''} ${j.source_type ?? ''}`
+  return bucket.match.test(haystack)
+}
+
+function formatGlDate(iso: string) {
+  return new Date(iso.length === 10 ? `${iso}T00:00:00` : iso).toLocaleDateString('en-PH', {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+  })
+}
+
+function formatSourceLabel(source: string | null) {
+  if (!source) return 'General'
+  return source.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+}
+
+function sourceBadgeVariant(source: string | null): 'default' | 'success' | 'warning' | 'info' | 'purple' {
+  const s = (source ?? '').toLowerCase()
+  if (s.includes('contribution')) return 'success'
+  if (s.includes('loan') || s.includes('repayment')) return 'info'
+  if (s.includes('payroll') || s.includes('salary') || s.includes('wage')) return 'purple'
+  if (s.includes('payable') || s.includes('supplier')) return 'warning'
+  if (s.includes('collection') || s.includes('pos')) return 'info'
+  return 'default'
+}
+
 export function FinanceSubPage() {
   const { section = 'general-ledger' } = useParams()
   const cfg = meta[section] ?? meta['general-ledger']
+  const [glBucket, setGlBucket] = useState('all')
+  const [glSearch, setGlSearch] = useState('')
 
-  const { data: journals = [] } = useQuery({
+  const { data: glData } = useQuery({
     queryKey: ['finance-gl'],
     queryFn: async () => {
       const { data, error } = await supabase
@@ -44,17 +93,52 @@ export function FinanceSubPage() {
         .order('entry_date', { ascending: false })
         .limit(100)
       if (error) throw error
-      return data as {
-        id: string
-        reference: string
-        description: string | null
-        entry_date: string
-        source_type: string | null
-        posted_at: string | null
-      }[]
+      const journals = (data ?? []) as GlJournal[]
+      const totalsById: Record<string, { debit: number; credit: number }> = {}
+      if (journals.length) {
+        const { data: lines, error: lineErr } = await supabase
+          .from('journal_lines')
+          .select('journal_entry_id, debit, credit')
+          .in(
+            'journal_entry_id',
+            journals.map((j) => j.id),
+          )
+        if (lineErr) throw lineErr
+        for (const line of lines ?? []) {
+          const l = line as { journal_entry_id: string; debit: string; credit: string }
+          const cur = totalsById[l.journal_entry_id] ?? { debit: 0, credit: 0 }
+          cur.debit += Number(l.debit)
+          cur.credit += Number(l.credit)
+          totalsById[l.journal_entry_id] = cur
+        }
+      }
+      return { journals, totalsById }
     },
     enabled: section === 'general-ledger',
   })
+
+  const journals = glData?.journals ?? []
+  const glTotalsById = glData?.totalsById ?? {}
+
+  const glFiltered = useMemo(() => {
+    const bucket = GL_BUCKETS.find((b) => b.key === glBucket) ?? GL_BUCKETS[0]
+    const q = glSearch.trim().toLowerCase()
+    return journals.filter((j) => {
+      if (!journalMatchesBucket(j, bucket)) return false
+      if (!q) return true
+      return (
+        j.reference.toLowerCase().includes(q) ||
+        (j.description ?? '').toLowerCase().includes(q) ||
+        (j.source_type ?? '').toLowerCase().includes(q)
+      )
+    })
+  }, [journals, glBucket, glSearch])
+
+  const glMtdCount = useMemo(() => {
+    const now = new Date()
+    const prefix = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
+    return journals.filter((j) => j.entry_date.startsWith(prefix)).length
+  }, [journals])
 
   const { data: payables = [] } = useQuery({
     queryKey: ['finance-ap'],
@@ -135,57 +219,121 @@ export function FinanceSubPage() {
     enabled: section === 'cash-bank',
   })
 
-  const { data: budgets = [] } = useQuery({
-    queryKey: ['finance-budget'],
-    queryFn: async () => {
-      const { data, error } = await supabase.from('budgets').select('*').limit(50)
-      if (error) throw error
-      return data
-    },
-    enabled: section === 'budget',
-  })
-
   return (
     <div>
-      <PageHeader title={cfg.title} description={cfg.description} />
+      {section === 'budget' ? null : <PageHeader title={cfg.title} description={cfg.description} />}
 
       {section === 'general-ledger' ? (
-        <div className="space-y-4">
-          <div className="flex flex-wrap gap-2 text-sm">
-            {GL_BUCKETS.map((b) => (
-              <span key={b.key} className="rounded-md border bg-white px-3 py-1 text-slate-600">
-                {b.label}
-              </span>
-            ))}
+        <div className="space-y-6">
+          <div className="grid gap-4 sm:grid-cols-3">
+            <KpiCard label="Posted entries" value={String(journals.length)} hint="Latest 100 journals" icon={BookOpen} />
+            <KpiCard label="This month" value={String(glMtdCount)} hint="By entry date" icon={CalendarDays} iconClassName="bg-green-50 text-green-700" />
+            <KpiCard
+              label="In view"
+              value={String(glFiltered.length)}
+              hint={glSearch || glBucket !== 'all' ? 'Filtered list' : 'All sources'}
+              icon={FileStack}
+              iconClassName="bg-red-50 text-brand-red"
+            />
           </div>
-          <Card>
-            <CardContent className="overflow-x-auto p-0">
-              <table className="w-full text-sm">
-                <thead className="bg-slate-50">
-                  <tr>
-                    <th className="px-4 py-2 text-left">Date</th>
-                    <th className="px-4 py-2 text-left">Reference</th>
-                    <th className="px-4 py-2 text-left">Description</th>
-                    <th className="px-4 py-2 text-left">Source</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {journals.map((j) => {
-                    const bucket =
-                      GL_BUCKETS.find((b) => b.match && (j.description?.match(b.match) || j.source_type?.match(b.match)))
-                        ?.label ?? 'General'
-                    return (
-                      <tr key={j.id} className="border-t">
-                        <td className="px-4 py-2">{j.entry_date}</td>
-                        <td className="px-4 py-2">{j.reference}</td>
-                        <td className="px-4 py-2">{j.description ?? '—'}</td>
-                        <td className="px-4 py-2">{j.source_type ?? bucket}</td>
+
+          <Card className="overflow-hidden border-slate-200 shadow-sm">
+            <CardHeader className="space-y-4 border-b border-slate-100 bg-gradient-to-br from-slate-50 via-white to-blue-50/30 pb-5">
+              <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                <div>
+                  <CardTitle className="text-lg text-navy">Posted journals</CardTitle>
+                  <p className="mt-1 text-sm text-slate-500">
+                    Double-entry postings from operations modules. Use filters to focus payables, loans, or payroll.
+                  </p>
+                </div>
+                <div className="relative w-full lg:max-w-sm">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                  <Input
+                    value={glSearch}
+                    onChange={(e) => setGlSearch(e.target.value)}
+                    placeholder="Search reference, description, source…"
+                    className="border-slate-200 bg-white pl-9 shadow-sm"
+                  />
+                </div>
+              </div>
+              <Tabs value={glBucket} onValueChange={setGlBucket}>
+                <TabsList className="h-auto flex-wrap justify-start gap-1 p-1">
+                  {GL_BUCKETS.map((b) => (
+                    <TabsTrigger key={b.key} value={b.key} className="data-[state=active]:shadow-sm">
+                      {b.label}
+                    </TabsTrigger>
+                  ))}
+                </TabsList>
+              </Tabs>
+            </CardHeader>
+            <CardContent className="p-0">
+              {!journals.length ? (
+                <div className="p-6">
+                  <EmptyState
+                    title="No posted journals yet"
+                    description="When collections, contributions, loans, or payroll post to the GL, they will appear here with debit and credit totals."
+                  />
+                </div>
+              ) : glFiltered.length === 0 ? (
+                <div className="p-6">
+                  <EmptyState
+                    title="No matches"
+                    description="Try another filter or clear your search to see more entries."
+                    action={
+                      <button
+                        type="button"
+                        className="text-sm font-medium text-brand-blue hover:underline"
+                        onClick={() => {
+                          setGlBucket('all')
+                          setGlSearch('')
+                        }}
+                      >
+                        Reset filters
+                      </button>
+                    }
+                  />
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[640px] text-sm">
+                    <thead>
+                      <tr className="border-b border-slate-200 bg-navy text-white">
+                        <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-white/90">Date</th>
+                        <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-white/90">Reference</th>
+                        <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-white/90">Description</th>
+                        <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-white/90">Source</th>
+                        <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-white/90">Debit</th>
+                        <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-white/90">Credit</th>
                       </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-              {!journals.length ? <p className="p-6 text-sm text-slate-500">No posted journals yet.</p> : null}
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 bg-white">
+                      {glFiltered.map((j) => {
+                        const totals = glTotalsById[j.id]
+                        const source = j.source_type
+                        return (
+                          <tr key={j.id} className="transition-colors hover:bg-slate-50/80">
+                            <td className="whitespace-nowrap px-4 py-3 text-slate-600">{formatGlDate(j.entry_date)}</td>
+                            <td className="px-4 py-3 font-mono text-xs font-semibold text-navy">{j.reference}</td>
+                            <td className="max-w-xs px-4 py-3 text-slate-700">{j.description ?? '—'}</td>
+                            <td className="px-4 py-3">
+                              <Badge variant={sourceBadgeVariant(source)}>{formatSourceLabel(source)}</Badge>
+                            </td>
+                            <td className="px-4 py-3 text-right font-medium tabular-nums text-slate-800">
+                              {totals ? <CurrencyDisplay amount={String(totals.debit)} /> : '—'}
+                            </td>
+                            <td className="px-4 py-3 text-right font-medium tabular-nums text-slate-800">
+                              {totals ? <CurrencyDisplay amount={String(totals.credit)} /> : '—'}
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                  <p className="border-t border-slate-100 bg-slate-50/80 px-4 py-3 text-xs text-slate-500">
+                    Showing {glFiltered.length} of {journals.length} loaded entries · Status: posted
+                  </p>
+                </div>
+              )}
             </CardContent>
           </Card>
         </div>
@@ -236,9 +384,7 @@ export function FinanceSubPage() {
         <LedgerTable rows={cashAccounts as Record<string, unknown>[]} empty="No cash/bank accounts." />
       ) : null}
 
-      {section === 'budget' ? (
-        <LedgerTable rows={budgets as Record<string, unknown>[]} empty="No budget lines." />
-      ) : null}
+      {section === 'budget' ? <BudgetExpensesSection /> : null}
 
       {section === 'reports' && reportSummary ? (
         <Card>

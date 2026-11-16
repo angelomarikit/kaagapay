@@ -8,7 +8,7 @@ import { Label } from '@/components/ui/label'
 import { KpiCard } from '@/components/shared/KpiCard'
 import { PageHeader } from '@/components/shared/PageHeader'
 import { CurrencyDisplay } from '@/components/shared/CurrencyDisplay'
-import { addMoney, formatPeso, multiplyMoney } from '@/lib/money'
+import { addMoney, formatPeso, multiplyMoney, parseMoneyInput } from '@/lib/money'
 import { supabase } from '@/lib/supabase'
 
 type CartItem = { item_type: string; description: string; unit_price: string; quantity: number }
@@ -24,6 +24,9 @@ export function CollectionsPosPage() {
   const [lastStatus, setLastStatus] = useState<string | null>(null)
   const [sessionNotice, setSessionNotice] = useState<string | null>(null)
   const [sessionNo, setSessionNo] = useState(1)
+  const [newProductName, setNewProductName] = useState('')
+  const [newProductPrice, setNewProductPrice] = useState('')
+  const [productFormError, setProductFormError] = useState<string | null>(null)
 
   useEffect(() => {
     if (!sessionNotice) return
@@ -40,8 +43,48 @@ export function CollectionsPosPage() {
         .eq('is_active', true)
         .order('sort_order', { ascending: true })
       if (error) throw error
-      return data as { id: string; name: string; unit_price: string; is_default: boolean }[]
+      return (data ?? []).map((row) => {
+        const p = row as { id: string; name: string; unit_price: string | number; is_default: boolean }
+        return {
+          id: p.id,
+          name: p.name,
+          unit_price: String(p.unit_price),
+          is_default: p.is_default,
+        }
+      })
     },
+  })
+
+  const addPosProduct = useMutation({
+    mutationFn: async () => {
+      const name = newProductName.trim()
+      const price = Number(newProductPrice)
+      if (!name) throw new Error('Enter a product name.')
+      if (!Number.isFinite(price) || price < 0) throw new Error('Enter a valid price.')
+      const { data: existing, error: listErr } = await supabase.from('pos_products').select('id')
+      if (listErr) throw listErr
+      if (existing?.length) {
+        const { error: resetErr } = await supabase.from('pos_products').update({ is_default: false }).eq('is_active', true)
+        if (resetErr) throw resetErr
+      }
+      const sortOrder = (existing?.length ?? 0) + 1
+      const { error } = await supabase.from('pos_products').insert({
+        name,
+        unit_price: price.toFixed(2),
+        is_active: true,
+        is_default: true,
+        sort_order: sortOrder,
+      })
+      if (error) throw error
+    },
+    onSuccess: () => {
+      setProductFormError(null)
+      setNewProductName('')
+      setNewProductPrice('')
+      qc.invalidateQueries({ queryKey: ['pos-products'] })
+      setSessionNotice('Product saved — it is now the default quick-add item.')
+    },
+    onError: (e: Error) => setProductFormError(e.message),
   })
 
   const { data: dispatches = [] } = useQuery({
@@ -95,13 +138,18 @@ export function CollectionsPosPage() {
   const change =
     amountTendered && paymentMethod === 'cash' ? addMoney(amountTendered, `-${subtotal}`) : '0.00'
 
-  function addProduct(id: string, name: string, price: string, qty = 1) {
+  function moneyAmount(value: string | number) {
+    return parseMoneyInput(value)
+  }
+
+  function addProduct(id: string, name: string, price: string | number, qty = 1) {
+    const unitPrice = moneyAmount(price)
     setCart((prev) => {
       const existing = prev.find((p) => p.item_type === id)
       if (existing) {
         return prev.map((p) => (p.item_type === id ? { ...p, quantity: p.quantity + qty } : p))
       }
-      return [...prev, { item_type: id, description: name, unit_price: price, quantity: qty }]
+      return [...prev, { item_type: id, description: name, unit_price: unitPrice, quantity: qty }]
     })
   }
 
@@ -207,20 +255,59 @@ export function CollectionsPosPage() {
             <CardTitle>Products</CardTitle>
           </CardHeader>
           <CardContent className="space-y-2">
-            {products.map((p) => (
+            {products.length === 0 ? (
+              <p className="text-sm text-slate-500">No products yet. Add your first product below — it becomes the default quick-add button.</p>
+            ) : (
+              products.map((p) => (
+                <Button
+                  key={p.id}
+                  type="button"
+                  variant={p.is_default ? 'default' : 'outline'}
+                  className="w-full justify-between"
+                  onClick={() => addProduct(p.id, p.name, p.unit_price)}
+                >
+                  <span className="flex items-center gap-2">
+                    {p.name}
+                    {p.is_default ? <span className="rounded bg-white/20 px-1.5 text-xs">Default</span> : null}
+                  </span>
+                  <CurrencyDisplay amount={p.unit_price} />
+                </Button>
+              ))
+            )}
+            <div className="mt-4 rounded-lg border border-dashed border-slate-200 bg-slate-50 p-4">
+              <p className="mb-3 text-sm font-medium text-navy">Add product</p>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <div>
+                  <Label htmlFor="pos-product-name">Name</Label>
+                  <Input
+                    id="pos-product-name"
+                    placeholder="Product name"
+                    value={newProductName}
+                    onChange={(e) => setNewProductName(e.target.value)}
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="pos-product-price">Price (₱)</Label>
+                  <Input
+                    id="pos-product-price"
+                    inputMode="decimal"
+                    placeholder="0.00"
+                    value={newProductPrice}
+                    onChange={(e) => setNewProductPrice(e.target.value)}
+                  />
+                </div>
+              </div>
               <Button
-                key={p.id}
-                variant={p.is_default ? 'default' : 'outline'}
-                className="w-full justify-between"
-                onClick={() => addProduct(p.id, p.name, p.unit_price)}
+                type="button"
+                className="mt-3"
+                variant="outline"
+                disabled={addPosProduct.isPending}
+                onClick={() => addPosProduct.mutate()}
               >
-                {p.name}
-                <CurrencyDisplay amount={p.unit_price} />
+                Save product (set as default)
               </Button>
-            ))}
-            {!products.length ? (
-              <p className="text-sm text-slate-500">Run migration 025 to seed POS products or add products in the database.</p>
-            ) : null}
+              {productFormError ? <p className="mt-2 text-sm text-red-600">{productFormError}</p> : null}
+            </div>
           </CardContent>
         </Card>
         <Card>

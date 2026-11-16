@@ -20,6 +20,7 @@ const fuelSchema = z.object({
   unit_price: z.number({ error: 'Unit price is required' }).positive('Unit price must be positive'),
   fuel_station: z.string().optional(),
   transaction_date: z.string().min(1),
+  odometer_reading: z.number().nonnegative().optional(),
 })
 
 type FuelForm = z.infer<typeof fuelSchema>
@@ -45,7 +46,14 @@ function nextFuelRef() {
 export function FuelExpensePage() {
   const qc = useQueryClient()
   const [showForm, setShowForm] = useState(false)
+  const [showExpenseForm, setShowExpenseForm] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
+  const [expVehicleId, setExpVehicleId] = useState('')
+  const [expCategory, setExpCategory] = useState('operating')
+  const [expDescription, setExpDescription] = useState('')
+  const [expAmount, setExpAmount] = useState('')
+  const [expDate, setExpDate] = useState(new Date().toISOString().slice(0, 10))
+  const [expOdometer, setExpOdometer] = useState('')
 
   const { data: vehicles = [] } = useQuery({
     queryKey: ['vehicles'],
@@ -116,6 +124,7 @@ export function FuelExpensePage() {
         unit_price: values.unit_price,
         fuel_station: values.fuel_station || null,
         transaction_date: values.transaction_date,
+        odometer_reading: values.odometer_reading ?? null,
       })
       if (error) throw error
     },
@@ -129,6 +138,33 @@ export function FuelExpensePage() {
     onError: (e: Error) => setFormError(e.message),
   })
 
+  const saveExpense = useMutation({
+    mutationFn: async () => {
+      const amt = Number(expAmount)
+      if (!amt || amt <= 0) throw new Error('Enter a valid amount.')
+      const y = new Date().getFullYear()
+      const ref = `EXP-${y}-${Math.floor(Math.random() * 9000) + 1000}`
+      const { error } = await supabase.from('operating_expenses').insert({
+        reference_number: ref,
+        vehicle_id: expVehicleId || null,
+        expense_category: expCategory,
+        description: expDescription || null,
+        amount: amt,
+        expense_date: expDate,
+        odometer_reading: expOdometer ? Number(expOdometer) : null,
+      })
+      if (error) throw error
+    },
+    onSuccess: () => {
+      setShowExpenseForm(false)
+      setExpAmount('')
+      setExpDescription('')
+      setExpOdometer('')
+      qc.invalidateQueries({ queryKey: ['operating-expenses'] })
+      qc.invalidateQueries({ queryKey: ['dashboard-stats'] })
+    },
+  })
+
   return (
     <div>
       <PageHeader
@@ -136,10 +172,15 @@ export function FuelExpensePage() {
         description="Record fuel purchases and view vehicle operating expenses from the database."
         icon={<Fuel className="h-7 w-7" />}
         actions={
-          <Button onClick={() => setShowForm((v) => !v)}>
-            <Plus className="h-4 w-4" />
-            Record fuel
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button onClick={() => setShowForm((v) => !v)}>
+              <Plus className="h-4 w-4" />
+              Record fuel
+            </Button>
+            <Button variant="outline" onClick={() => setShowExpenseForm((v) => !v)}>
+              New expense
+            </Button>
+          </div>
         }
       />
 
@@ -222,6 +263,16 @@ export function FuelExpensePage() {
                 <Label htmlFor="transaction_date">Date</Label>
                 <Input id="transaction_date" type="date" className="mt-1" {...register('transaction_date')} />
               </div>
+              <div>
+                <Label htmlFor="odometer_reading">Odometer (km)</Label>
+                <Input
+                  id="odometer_reading"
+                  type="number"
+                  step="0.1"
+                  className="mt-1"
+                  {...register('odometer_reading', { valueAsNumber: true })}
+                />
+              </div>
               {formError ? <p className="md:col-span-2 text-sm text-red-600">{formError}</p> : null}
               <div className="flex gap-2 md:col-span-2">
                 <Button type="submit" disabled={isSubmitting || saveFuel.isPending}>
@@ -232,6 +283,39 @@ export function FuelExpensePage() {
                 </Button>
               </div>
             </form>
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {showExpenseForm ? (
+        <Card className="mb-6 border-brand-blue">
+          <CardHeader>
+            <CardTitle>New operating expense</CardTitle>
+          </CardHeader>
+          <CardContent className="grid max-w-xl gap-4">
+            <div>
+              <Label>Vehicle (optional)</Label>
+              <select
+                className="mt-1 flex h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm"
+                value={expVehicleId}
+                onChange={(e) => setExpVehicleId(e.target.value)}
+              >
+                <option value="">—</option>
+                {vehicles.map((v) => (
+                  <option key={v.id} value={v.id}>
+                    {v.plate_number}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <Input placeholder="Category" value={expCategory} onChange={(e) => setExpCategory(e.target.value)} />
+            <Input placeholder="Description" value={expDescription} onChange={(e) => setExpDescription(e.target.value)} />
+            <Input placeholder="Amount" inputMode="decimal" value={expAmount} onChange={(e) => setExpAmount(e.target.value)} />
+            <Input type="date" value={expDate} onChange={(e) => setExpDate(e.target.value)} />
+            <Input placeholder="Odometer (km)" inputMode="decimal" value={expOdometer} onChange={(e) => setExpOdometer(e.target.value)} />
+            <Button onClick={() => saveExpense.mutate()} disabled={saveExpense.isPending}>
+              Save expense
+            </Button>
           </CardContent>
         </Card>
       ) : null}

@@ -73,22 +73,13 @@ export function InventoryPage() {
       if (!moveItemId || !qty || qty <= 0) throw new Error('Select item and quantity.')
       const item = items.find((i) => i.id === moveItemId)
       if (!item) throw new Error('Item not found.')
-      const onHand = Number(item.quantity_on_hand)
-      const delta = moveType === 'receive' ? qty : -qty
-      const next = onHand + delta
-      if (next < 0) throw new Error('Insufficient stock.')
-
-      const { error: mErr } = await supabase.from('inventory_movements').insert({
-        item_id: moveItemId,
-        movement_type: moveType,
-        quantity: qty,
-        unit_cost: item.unit_cost,
-        reference: moveType === 'receive' ? 'Stock receive' : 'Stock issue',
+      const { error } = await supabase.rpc('post_inventory_movement', {
+        p_item_id: moveItemId,
+        p_movement_type: moveType,
+        p_quantity: qty,
+        p_reference: moveType === 'receive' ? 'Stock receive' : 'Stock issue',
       })
-      if (mErr) throw mErr
-
-      const { error: uErr } = await supabase.from('inventory_items').update({ quantity_on_hand: next }).eq('id', moveItemId)
-      if (uErr) throw uErr
+      if (error) throw error
     },
     onSuccess: () => {
       setMoveQty('')

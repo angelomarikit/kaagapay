@@ -15,6 +15,11 @@ export function PayrollPage() {
   const [empName, setEmpName] = useState('')
   const [empPosition, setEmpPosition] = useState('')
   const [empSalary, setEmpSalary] = useState('')
+  const [empDepartment, setEmpDepartment] = useState('')
+  const [empEmail, setEmpEmail] = useState('')
+  const [empContact, setEmpContact] = useState('')
+  const [empBenefits, setEmpBenefits] = useState('')
+  const [empHireDate, setEmpHireDate] = useState('')
   const [periodStart, setPeriodStart] = useState('')
   const [periodEnd, setPeriodEnd] = useState('')
 
@@ -50,6 +55,11 @@ export function PayrollPage() {
       const { error } = await supabase.from('employees').insert({
         full_name: empName.trim(),
         position: empPosition.trim() || null,
+        department: empDepartment.trim() || null,
+        email: empEmail.trim() || null,
+        contact_number: empContact.trim() || null,
+        benefits: empBenefits.trim() || null,
+        hire_date: empHireDate || null,
         basic_salary: Number.isFinite(salary) ? salary : null,
         status: 'active',
       })
@@ -120,7 +130,7 @@ export function PayrollPage() {
     <div>
       <PageHeader
         title="Payroll & Benefits"
-        description="Employee master file, payroll runs, and approvals."
+        description="Employee records with position, benefits, and payroll runs."
         icon={<Coins className="h-7 w-7" />}
       />
       <Tabs defaultValue="employees">
@@ -133,12 +143,20 @@ export function PayrollPage() {
             <CardHeader>
               <CardTitle>Add employee</CardTitle>
             </CardHeader>
-            <CardContent className="grid max-w-2xl gap-4 md:grid-cols-3">
-              <Input placeholder="Full name" value={empName} onChange={(e) => setEmpName(e.target.value)} />
+            <CardContent className="grid max-w-3xl gap-4 md:grid-cols-2">
+              <Input placeholder="Full name *" value={empName} onChange={(e) => setEmpName(e.target.value)} />
               <Input placeholder="Position" value={empPosition} onChange={(e) => setEmpPosition(e.target.value)} />
-              <Input placeholder="Basic salary" inputMode="decimal" value={empSalary} onChange={(e) => setEmpSalary(e.target.value)} />
-              <Button className="w-fit md:col-span-3" onClick={() => addEmployee.mutate()} disabled={addEmployee.isPending}>
-                Save employee
+              <Input placeholder="Department" value={empDepartment} onChange={(e) => setEmpDepartment(e.target.value)} />
+              <Input placeholder="Basic salary (₱)" inputMode="decimal" value={empSalary} onChange={(e) => setEmpSalary(e.target.value)} />
+              <Input placeholder="Email" type="email" value={empEmail} onChange={(e) => setEmpEmail(e.target.value)} />
+              <Input placeholder="Contact number" value={empContact} onChange={(e) => setEmpContact(e.target.value)} />
+              <Input placeholder="Benefits (e.g. SSS, PhilHealth, allowance)" value={empBenefits} onChange={(e) => setEmpBenefits(e.target.value)} />
+              <div>
+                <Label className="text-xs text-slate-500">Hire date</Label>
+                <Input type="date" value={empHireDate} onChange={(e) => setEmpHireDate(e.target.value)} />
+              </div>
+              <Button className="w-fit md:col-span-2" onClick={() => addEmployee.mutate()} disabled={addEmployee.isPending}>
+                Add employee
               </Button>
               {addEmployee.error ? <p className="text-sm text-red-600 md:col-span-3">{(addEmployee.error as Error).message}</p> : null}
             </CardContent>

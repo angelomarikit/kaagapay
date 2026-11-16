@@ -31,12 +31,16 @@ export function CollectionsPosPage() {
     return () => window.clearTimeout(t)
   }, [sessionNotice])
 
-  const { data: fares = [] } = useQuery({
-    queryKey: ['fare-types'],
+  const { data: products = [] } = useQuery({
+    queryKey: ['pos-products'],
     queryFn: async () => {
-      const { data, error } = await supabase.from('fare_types').select('*').eq('is_active', true)
+      const { data, error } = await supabase
+        .from('pos_products')
+        .select('id, name, unit_price, is_default')
+        .eq('is_active', true)
+        .order('sort_order', { ascending: true })
       if (error) throw error
-      return data as { code: string; name: string; unit_price: string }[]
+      return data as { id: string; name: string; unit_price: string; is_default: boolean }[]
     },
   })
 
@@ -91,13 +95,13 @@ export function CollectionsPosPage() {
   const change =
     amountTendered && paymentMethod === 'cash' ? addMoney(amountTendered, `-${subtotal}`) : '0.00'
 
-  function addFare(code: string, name: string, price: string, qty = 1) {
+  function addProduct(id: string, name: string, price: string, qty = 1) {
     setCart((prev) => {
-      const existing = prev.find((p) => p.item_type === code)
+      const existing = prev.find((p) => p.item_type === id)
       if (existing) {
-        return prev.map((p) => (p.item_type === code ? { ...p, quantity: p.quantity + qty } : p))
+        return prev.map((p) => (p.item_type === id ? { ...p, quantity: p.quantity + qty } : p))
       }
-      return [...prev, { item_type: code, description: name, unit_price: price, quantity: qty }]
+      return [...prev, { item_type: id, description: name, unit_price: price, quantity: qty }]
     })
   }
 
@@ -111,7 +115,7 @@ export function CollectionsPosPage() {
 
   const confirm = useMutation({
     mutationFn: async () => {
-      if (!cart.length) throw new Error('Add at least one fare item.')
+      if (!cart.length) throw new Error('Add at least one product.')
       const clientRequestId = crypto.randomUUID()
       const payload = {
         client_request_id: clientRequestId,
@@ -145,7 +149,7 @@ export function CollectionsPosPage() {
       clearCartForNextSale({
         keepDispatch: true,
         notice: data?.receipt_number
-          ? `Receipt ${data.receipt_number} posted. Add fares for the next passenger.`
+          ? `Receipt ${data.receipt_number} posted. Add products for the next sale.`
           : 'Collection saved.',
       })
       qc.invalidateQueries({ queryKey: ['dashboard-stats'] })
@@ -167,7 +171,7 @@ export function CollectionsPosPage() {
   }
 
   function startNewCollection() {
-    clearCartForNextSale({ notice: 'New collection started — tap a fare item to add it to the cart.' })
+    clearCartForNextSale({ notice: 'New collection started — tap a product to add it to the cart.' })
   }
 
   const todayTotal = recentCollections
@@ -178,7 +182,7 @@ export function CollectionsPosPage() {
     <div>
       <PageHeader
         title="Daily Collections (POS)"
-        description="Record fare collections, issue official receipts, and track daily earnings."
+        description="Record product sales and collections, issue receipts, and track daily earnings."
         icon={<HandCoins className="h-7 w-7" />}
         actions={
           <Button type="button" onClick={startNewCollection}>
@@ -200,22 +204,22 @@ export function CollectionsPosPage() {
       <div className="mb-6 grid gap-6 lg:grid-cols-3">
         <Card className="lg:col-span-2">
           <CardHeader>
-            <CardTitle>Fare items</CardTitle>
+            <CardTitle>Products</CardTitle>
           </CardHeader>
           <CardContent className="space-y-2">
-            {fares.map((f) => (
+            {products.map((p) => (
               <Button
-                key={f.code}
-                variant="outline"
+                key={p.id}
+                variant={p.is_default ? 'default' : 'outline'}
                 className="w-full justify-between"
-                onClick={() => addFare(f.code, f.name, f.unit_price)}
+                onClick={() => addProduct(p.id, p.name, p.unit_price)}
               >
-                {f.name}
-                <CurrencyDisplay amount={f.unit_price} />
+                {p.name}
+                <CurrencyDisplay amount={p.unit_price} />
               </Button>
             ))}
-            {!fares.length ? (
-              <p className="text-sm text-slate-500">Run migration 014 for fare types or add fares in the database.</p>
+            {!products.length ? (
+              <p className="text-sm text-slate-500">Run migration 025 to seed POS products or add products in the database.</p>
             ) : null}
           </CardContent>
         </Card>
@@ -248,7 +252,7 @@ export function CollectionsPosPage() {
           </CardHeader>
           <CardContent>
             {cart.length === 0 ? (
-              <p className="text-sm text-slate-500">Add fares from the list above.</p>
+              <p className="text-sm text-slate-500">Add products from the list above.</p>
             ) : (
               <ul className="mb-4 space-y-2 text-sm">
                 {cart.map((item) => (

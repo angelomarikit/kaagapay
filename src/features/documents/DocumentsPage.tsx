@@ -18,6 +18,7 @@ export function DocumentsPage() {
   const [title, setTitle] = useState('')
   const [category, setCategory] = useState('general')
   const [expires, setExpires] = useState('')
+  const [cabinet, setCabinet] = useState('')
 
   const { data: docs = [], isLoading } = useQuery({
     queryKey: ['documents'],
@@ -30,6 +31,7 @@ export function DocumentsPage() {
         category: string
         storage_path: string
         expires_on: string | null
+        cabinet_location: string | null
         created_at: string
       }[]
     },
@@ -50,6 +52,7 @@ export function DocumentsPage() {
         category,
         storage_path: path,
         expires_on: expires || null,
+        cabinet_location: cabinet.trim() || null,
         uploaded_by: user?.id ?? null,
       })
       if (insErr) throw insErr
@@ -57,6 +60,7 @@ export function DocumentsPage() {
     onSuccess: () => {
       setTitle('')
       setExpires('')
+      setCabinet('')
       if (fileRef.current) fileRef.current.value = ''
       qc.invalidateQueries({ queryKey: ['documents'] })
     },
@@ -100,6 +104,10 @@ export function DocumentsPage() {
             <Label>Expires on (optional)</Label>
             <Input type="date" value={expires} onChange={(e) => setExpires(e.target.value)} />
           </div>
+          <div>
+            <Label>Cabinet / shelf (hard copy)</Label>
+            <Input placeholder="e.g. Cabinet A-3, Drawer 2" value={cabinet} onChange={(e) => setCabinet(e.target.value)} />
+          </div>
           <SignalFileInput ref={fileRef} />
           <Button onClick={() => upload.mutate()} disabled={upload.isPending}>
             Upload to storage
@@ -122,6 +130,7 @@ export function DocumentsPage() {
                 <tr>
                   <th className="px-4 py-2 text-left">Title</th>
                   <th className="px-4 py-2 text-left">Category</th>
+                  <th className="px-4 py-2 text-left">Cabinet</th>
                   <th className="px-4 py-2 text-left">Uploaded</th>
                   <th />
                 </tr>
@@ -131,6 +140,7 @@ export function DocumentsPage() {
                   <tr key={d.id} className="border-t">
                     <td className="px-4 py-2">{d.title}</td>
                     <td className="px-4 py-2">{d.category}</td>
+                    <td className="px-4 py-2">{d.cabinet_location ?? '—'}</td>
                     <td className="px-4 py-2">{new Date(d.created_at).toLocaleString()}</td>
                     <td className="px-4 py-2 text-right">
                       <Button size="sm" variant="outline" onClick={() => download.mutate(d.storage_path)} disabled={download.isPending}>

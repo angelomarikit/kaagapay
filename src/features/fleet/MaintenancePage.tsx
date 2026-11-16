@@ -19,6 +19,7 @@ export function MaintenancePage() {
   const [laborCost, setLaborCost] = useState('0')
   const [partsCost, setPartsCost] = useState('0')
   const [notes, setNotes] = useState('')
+  const [odometer, setOdometer] = useState('')
 
   const { data = [], isLoading } = useQuery({
     queryKey: ['maintenance'],
@@ -53,6 +54,7 @@ export function MaintenancePage() {
         labor_cost: Number(laborCost) || 0,
         parts_cost: Number(partsCost) || 0,
         notes: notes || null,
+        odometer_reading: odometer ? Number(odometer) : null,
         completed_at: status === 'completed' ? new Date().toISOString() : null,
       })
       if (error) throw error
@@ -102,7 +104,7 @@ export function MaintenancePage() {
                 value={maintenanceType}
                 onChange={(e) => setMaintenanceType(e.target.value)}
               >
-                <option value="preventive">Preventive</option>
+                <option value="preventive">Preventive maintenance</option>
                 <option value="corrective">Corrective</option>
                 <option value="inspection">Inspection</option>
               </select>
@@ -133,6 +135,10 @@ export function MaintenancePage() {
                 <Label htmlFor="parts">Parts cost</Label>
                 <Input id="parts" inputMode="decimal" value={partsCost} onChange={(e) => setPartsCost(e.target.value)} />
               </div>
+            </div>
+            <div>
+              <Label htmlFor="odometer">Odometer reading (km)</Label>
+              <Input id="odometer" inputMode="decimal" value={odometer} onChange={(e) => setOdometer(e.target.value)} />
             </div>
             <div>
               <Label htmlFor="notes">Notes</Label>

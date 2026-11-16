@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useParams } from 'react-router-dom'
 import { Button } from '@/components/ui/button'
@@ -9,6 +9,15 @@ import { PageHeader } from '@/components/shared/PageHeader'
 import { CurrencyDisplay } from '@/components/shared/CurrencyDisplay'
 import { EmptyState } from '@/components/shared/EmptyState'
 import { supabase } from '@/lib/supabase'
+
+function DetailRow({ label, value }: { label: string; value: ReactNode }) {
+  return (
+    <>
+      <dt className="text-slate-500">{label}</dt>
+      <dd className="font-medium text-navy">{value}</dd>
+    </>
+  )
+}
 
 const titles: Record<string, string> = {
   applications: 'Loan Applications',
@@ -45,6 +54,8 @@ export function LoanSubPage() {
     enabled: section === 'applications',
   })
 
+  const [detailLoanId, setDetailLoanId] = useState<string | null>(null)
+
   const { data: loans = [] } = useQuery({
     queryKey: ['loans', section],
     queryFn: async () => {
@@ -58,6 +69,44 @@ export function LoanSubPage() {
     },
     enabled: section === 'active' || section === 'repayments',
   })
+
+  const { data: loanSchedules = [] } = useQuery({
+    queryKey: ['loan-schedules', detailLoanId],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('loan_schedules')
+        .select('*')
+        .eq('loan_id', detailLoanId!)
+        .order('payment_no', { ascending: true })
+      if (error) throw error
+      return data as {
+        payment_no: number
+        due_date: string
+        amount_due: string
+        principal_portion: string
+        interest_portion: string
+        status: string
+      }[]
+    },
+    enabled: !!detailLoanId,
+  })
+
+  const detailLoan = useMemo(() => {
+    if (!detailLoanId) return null
+    return (loans as { id: string }[]).find((l) => l.id === detailLoanId) as
+      | {
+          id: string
+          loan_number: string
+          principal: string
+          outstanding_principal: string
+          interest_rate: string
+          term_months: number
+          first_due_date: string | null
+          disbursed_at: string | null
+          members: { full_name: string; member_code: string } | null
+        }
+      | undefined
+  }, [detailLoanId, loans])
 
   const { data: loanTypes = [] } = useQuery({
     queryKey: ['loan-types'],
@@ -159,6 +208,67 @@ export function LoanSubPage() {
 
   return (
     <div>
+      {detailLoan ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" role="dialog" aria-modal="true">
+          <Card className="max-h-[90vh] w-full max-w-lg overflow-y-auto">
+            <CardHeader>
+              <CardTitle>
+                {detailLoan.loan_number} — {detailLoan.members?.full_name}
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4 text-sm">
+              <dl className="grid grid-cols-2 gap-2">
+                <DetailRow label="Principal" value={<CurrencyDisplay amount={detailLoan.principal} />} />
+                <DetailRow label="Balance" value={<CurrencyDisplay amount={detailLoan.outstanding_principal} />} />
+                <DetailRow label="Interest rate" value={`${Number(detailLoan.interest_rate)}% per year`} />
+                <DetailRow label="Term" value={`${detailLoan.term_months} months`} />
+                <DetailRow
+                  label="First due date"
+                  value={
+                    detailLoan.first_due_date
+                      ? new Date(detailLoan.first_due_date).toLocaleDateString()
+                      : loanSchedules[0]
+                        ? new Date(loanSchedules[0].due_date).toLocaleDateString()
+                        : '—'
+                  }
+                />
+              </dl>
+              <p className="text-slate-600">Monthly dues are scheduled on the same calendar day each month from disbursement.</p>
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b text-left text-slate-500">
+                    <th className="py-1">#</th>
+                    <th>Due date</th>
+                    <th>Principal</th>
+                    <th>Interest</th>
+                    <th>Total due</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {loanSchedules.map((s) => (
+                    <tr key={s.payment_no} className="border-b">
+                      <td className="py-1">{s.payment_no}</td>
+                      <td>{new Date(s.due_date).toLocaleDateString()}</td>
+                      <td>
+                        <CurrencyDisplay amount={s.principal_portion} />
+                      </td>
+                      <td>
+                        <CurrencyDisplay amount={s.interest_portion} />
+                      </td>
+                      <td>
+                        <CurrencyDisplay amount={s.amount_due} />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <Button variant="outline" onClick={() => setDetailLoanId(null)}>
+                Close
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
+      ) : null}
       <PageHeader
         title={title}
         description="Loans & financing — applications, disbursement, and repayments via Supabase RPCs."
@@ -291,15 +401,16 @@ export function LoanSubPage() {
               <tbody>
                 {activeLoans.map((row) => {
                   const r = row as {
+                    id: string
                     loan_number: string
                     outstanding_principal: string
                     status: string
                     members: { full_name: string } | null
                   }
                   return (
-                    <tr key={r.loan_number} className="border-t">
-                      <td className="px-4 py-2">{r.loan_number}</td>
-                      <td className="px-4 py-2">{r.members?.full_name}</td>
+                    <tr key={r.loan_number} className="border-t cursor-pointer hover:bg-slate-50" onClick={() => setDetailLoanId(r.id)}>
+                      <td className="px-4 py-2 text-brand-blue">{r.loan_number}</td>
+                      <td className="px-4 py-2 font-medium text-navy">{r.members?.full_name}</td>
                       <td className="px-4 py-2">
                         <CurrencyDisplay amount={r.outstanding_principal} />
                       </td>
